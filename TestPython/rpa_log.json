@@ -1,0 +1,22 @@
+[
+    {
+        "type": "mouse_click",
+        "timestamp": 1761242163.1159222,
+        "details": {
+            "x": 1293,
+            "y": 598,
+            "button": "Button.left",
+            "delay": 0.0
+        }
+    },
+    {
+        "type": "mouse_click",
+        "timestamp": 1761242163.1159222,
+        "details": {
+            "x": 1293,
+            "y": 598,
+            "button": "Button.left",
+            "delay": 0.0
+        }
+    }
+]
