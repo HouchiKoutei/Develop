@@ -18,7 +18,7 @@ tasks = [
         "use_rag": True, 
         "Ollama_server_url":OLLAMA_SERVER_URL,
         "rag_server_url":"http://192.168.40.72:8001",
-        "rag_files": "" ,
+        "rag_files": ["./Sources/Tests/LLM_Control.py","./Sources/Tests/LLM_Evaluate.py" ],
         "rag_prompt": """
             以下のソースコードの内容のみに基づいて、「質問」に回答してください。
             ソースコードに記載されていない内容については回答しないでください。
@@ -95,6 +95,7 @@ def generate_evaluation(
 
 # ====================================================================
 # 純粋関数 (データ変換)
+# LLM_Control.py から移動し、評価機能の中心としてここに残します。
 # ====================================================================
 
 def parse_evaluation_output(response_text: str) -> Tuple[int, str]:
@@ -133,12 +134,12 @@ def format_ranking_output(question: str, evaluator: str, results: List[Dict[str,
 
     ranking_output += "--- 詳細 --- \n"
     for result in sorted_results:
-         ranking_output += f"モデル: {result['model']}\n"
-         ranking_output += f"スコア: {result['score']}点\n"
-         ranking_output += f"生成時間: {result['latency']:.2f}秒\n"
-         ranking_output += f"総評:\n{result['summary']}\n"
-         ranking_output += f"回答:\n{result['answer']}\n"
-         ranking_output += "--------------------------------------\n"
+        ranking_output += f"モデル: {result['model']}\n"
+        ranking_output += f"スコア: {result['score']}点\n"
+        ranking_output += f"生成時間: {result['latency']:.2f}秒\n"
+        ranking_output += f"総評:\n{result['summary']}\n"
+        ranking_output += f"回答:\n{result['answer']}\n"
+        ranking_output += "--------------------------------------\n"
          
     return ranking_output
 
@@ -162,7 +163,7 @@ def llm_evaluate(
             if ollama_server_url!= ollama_server_url_memory:
                 ollama_client = ollama.Client(host=ollama_server_url)
                 print(f"Ollamaクライアントを {ollama_server_url} に接続しました。")
-                ollama_server_url = ollama_server_url
+                ollama_server_url_memory = ollama_server_url
         except Exception as e:
             print(f"エラー: Ollamaクライアントの初期化に失敗しました: {e}", file=sys.stderr)
             return # 失敗した場合は終了
@@ -177,43 +178,46 @@ def llm_evaluate(
 
         # 1. 各設定項目の取得 (タスク固有 > 引数/大域変数)
         current_evaluator_model = task.get('evaluation', evaluator_model)
-        # ★★★ タスクにURLが設定されていない場合、引数の rag_server_host を使用 ★★★
         current_rag_server_url = task.get('rag_server_url', rag_server_url_setting)
-        current_rag_template = task.get('rag_prompt', "")
+        current_rag_template = task.get('rag_prompt', LLM_Control.RAG_PROMPT_TEMPLATE if use_rag else "") # RAG無効時は空
         current_evaluation_prompt = task.get('evaluation_prompt', EVALUATION_PROMPT_TEMPLATE)
 
-        db_status = False 
-        
-        # 0. RAGの準備 (ファイルがあればFastAPIサーバーに登録)
+        # 2. RAGの準備 (ファイルがあればFastAPIサーバーに登録)
+        rag_db_status = False 
         if use_rag and rag_files:
-            # ★★★ 生成したクライアントインスタンスを渡す ★★★
-            db_status = LLM_Control.load_files_to_vector_db(rag_files, ollama_client, current_rag_server_url)
+            rag_db_status = LLM_Control.load_files_to_vector_db(rag_files, ollama_client, current_rag_server_url)
 
         evaluation_results = []
 
-        # 1. 候補モデルの回答生成と時間計測
+        # 3. 候補モデルの回答生成と時間計測 (RAGモードで実行)
         for model_name in candidate_models:
-            # ★★★ タスク固有の設定を渡す ★★★
+            
+            # RAG/非RAG の実行フラグを決定
+            # RAGが有効だがDB登録に失敗した場合は、非RAGで実行する
+            is_rag_run = use_rag and rag_db_status
+            
+            # ★★★ 修正: モデル名にRAG状態を付加して結果を区別する ★★★
+            model_label = f"{model_name}{' (RAG)' if is_rag_run else ' (Non-RAG)'}"
+
             answer, latency = LLM_Control.generate_response(
                 model_name, 
                 question, 
                 ollama_client, 
-                db_status, 
+                is_rag_run, # RAG DB登録が成功した場合のみTrue
                 current_rag_template,
                 current_rag_server_url
             )
             
             result_data = {
-                'model': model_name,
+                'model': model_label, # RAG状態を反映したモデル名
                 'answer': answer,
                 'latency': latency,
                 'score': 0,
                 'summary': "未評価"
             }
             
-            # 2. 評価用モデルによるスコアリングと総評の生成
+            # 4. 評価用モデルによるスコアリングと総評の生成
             if not answer.startswith("[エラー:"):
-                # ★★★ タスク固有の評価モデルとプロンプトを渡す ★★★
                 score, summary = generate_evaluation(
                     current_evaluator_model, 
                     question, 
@@ -225,14 +229,14 @@ def llm_evaluate(
                 result_data['score'] = score
                 result_data['summary'] = summary
             else:
-                 result_data['summary'] = "回答生成エラーのため評価スキップ。"
+                result_data['summary'] = "回答生成エラーのため評価スキップ。"
                 
             evaluation_results.append(result_data)
                 
-        # 3. ランキングテキストを作成
+        # 5. ランキングテキストを作成
         ranking_text = format_ranking_output(question, current_evaluator_model, evaluation_results)
         
-        # 4. 結果をファイルに追記保存
+        # 6. 結果をファイルに追記保存
         LLM_Control._write_result_to_file(file_path, ranking_text)
             
     print("--- 全てのタスクが完了しました ---")
@@ -242,9 +246,6 @@ if __name__ == "__main__":
     
     # 1. Ollamaサーバーの起動確認と起動
     LLM_Control._start_ollama_server() 
-    
-   
-    
     
     # 2. タスクの実行
     llm_evaluate(tasks, OLLAMA_SERVER_URL,RAG_SERVER_URL)

@@ -293,21 +293,3 @@ def generate_response(
         latency = time.time() - start_time
         print(f"エラー: モデル '{model_name}' の応答取得中にエラーが発生しました: {e}")
         return f"[エラー: {e}]", latency
-
-# ====================================================================
-# 純粋関数 (データ変換)
-# ====================================================================
-
-def parse_evaluation_output(response_text: str) -> Tuple[int, str]:
-    """
-    評価用モデルのテキスト出力からスコアと総評を抽出します。
-    """
-    # スコア抽出: <SCORE>X</SCORE>
-    score_match = re.search(r"<SCORE>(\d+)</SCORE>", response_text)
-    score = int(score_match.group(1)) if score_match else 0
-
-    # 総評抽出: <SUMMARY>総評テキスト</SUMMARY> 
-    summary_match = re.search(r"<SUMMARY>(.*?)</SUMMARY>", response_text, re.DOTALL)
-    summary = summary_match.group(1).strip() if summary_match else "総評の抽出に失敗しました。"
-    
-    return score, summary
