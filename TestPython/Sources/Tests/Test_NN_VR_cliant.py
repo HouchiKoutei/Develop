@@ -12,13 +12,13 @@ import base64
 from io import BytesIO
 from PIL import Image
 
-# --- VR表示用HTML (全演算式表示版) ---
+# --- VR表示用HTML (全部入り・頭上高密度版) ---
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
-    <title>AI Deep Analysis Pipeline</title>
+    <title>AI Full Inspector VR</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
 </head>
@@ -27,21 +27,21 @@ HTML_TEMPLATE = """
         <a-sky color="#020202"></a-sky>
         <a-plane position="0 0 0" rotation="-90 0 0" width="30" height="30" color="#111"></a-plane>
 
-        <a-entity position="-5 2 -2" rotation="0 60 0">
-            <a-text value="INPUT (X)" position="0 2.2 0" align="center" width="6"></a-text>
-            <a-image id="input-src-img" width="2" height="2" position="0 1 0.01"></a-image>
-            
-            <a-plane width="3" height="3" color="#000" position="0 -1.8 0">
-                <a-text value="CALCULATION LIST (X * W)" position="-1.4 1.4 0.01" scale="0.5 0.5 0.5" color="#FFD700"></a-text>
-                <a-text id="calc-list-text" value="Loading..." position="-1.4 1.2 0.01" width="3.5" scale="0.3 0.3 0.3"></a-text>
-            </a-plane>
+        <a-entity position="-6 2.5 -3" rotation="0 45 0">
+            <a-text value="INPUT (X)" position="0 2.2 0" align="center" width="8"></a-text>
+            <a-image id="input-src-img" width="3.5" height="3.5"></a-image>
         </a-entity>
 
-        <a-entity position="0 4 -2">
+        <a-entity position="0 5.5 1" rotation="75 0 0">
+            <a-text value="REAL-TIME CALCULATION (X * W for Node 3)" position="0 3 0" align="center" width="5" color="yellow"></a-text>
+            <a-text id="calc-list-text" value="Loading..." align="center" width="2.2" color="#FFFFFF" font="monospace" wrapCount="90"></a-text>
+        </a-entity>
+
+        <a-entity position="0 4.5 -5">
             <a-text value="WEIGHTS (W)" align="center" color="cyan" scale="2 2 2"></a-text>
             <a-text value="<-- MINUS(Back) | PLUS(Front) -->" position="0 -0.5 0" align="center" scale="0.8 0.8 0.8"></a-text>
         </a-entity>
-        <a-entity id="graph-container" position="-1.4 2 -2"></a-entity>
+        <a-entity id="graph-container" position="-1.4 2.5 -5"></a-entity>
 
         <a-entity position="5 2 -2" rotation="0 -60 0">
             <a-plane width="3.5" height="5" color="#000" opacity="0.9"></a-plane>
@@ -52,7 +52,7 @@ HTML_TEMPLATE = """
             <a-text id="judgment-text" value="JUDGMENT" position="0 -2.0 0.1" scale="1.5 1.5 1.5" align="center"></a-text>
         </a-entity>
 
-        <a-camera position="0 2 5" wasd-controls="acceleration:30"></a-camera>
+        <a-camera position="0 2 5"></a-camera>
     </a-scene>
 
     <script>
@@ -67,17 +67,15 @@ HTML_TEMPLATE = """
         const bars = [];
         const labels = [];
         
-        // 28x28の重みと座標ラベル
         for (let y = 0; y < 28; y++) {
             for (let x = 0; x < 28; x++) {
                 const bar = document.createElement('a-box');
-                bar.setAttribute('width', '0.06');
-                bar.setAttribute('depth', '0.06');
+                bar.setAttribute('width', '0.08');
+                bar.setAttribute('depth', '0.08');
                 bar.setAttribute('position', `${x * 0.1} ${ (27-y) * 0.1 - 1.35 } 0`);
                 container.appendChild(bar);
                 bars.push(bar);
 
-                // 全座標にラベル（重すぎないよう文字サイズ調整）
                 const txt = document.createElement('a-text');
                 txt.setAttribute('scale', '0.12 0.12 0.12');
                 txt.setAttribute('align', 'center');
@@ -95,39 +93,41 @@ HTML_TEMPLATE = """
                 outStr += `${(i === data.pred ? ">" : " ")} [${i}]: ${v.toFixed(2).padStart(6)}\\n`;
             });
             resultText.setAttribute('value', outStr);
-            biasText.setAttribute('value', `Bias for '3': ${data.bias.toFixed(4)}`);
+            biasText.setAttribute('value', `Bias (Node 3): ${data.bias.toFixed(5)}`);
             
-            const isCorrect = data.pred === data.label;
             judgmentText.setAttribute('value', `PRED: ${data.pred}\\nACTUAL: ${data.label}`);
-            judgmentText.setAttribute('color', isCorrect ? "#0F0" : "#F00");
+            judgmentText.setAttribute('color', data.pred === data.label ? "#0F0" : "#F00");
 
-            // 左側：全演算式の一部を表示（784個は多すぎるため、代表的な30個程度をスクロール的に表示）
-            let calcStr = "";
+            // 頭上：全28行の計算プロセス（実際の値を代入）
             const flatX = data.input_raw.flat();
             const flatW = data.weights.flat();
-            for(let i=0; i<25; i++) {
-                const idx = i * 30 % 784; // 適当に散らす
-                const r = Math.floor(idx/28); const c = idx%28;
-                const val = flatX[idx] * flatW[idx];
-                calcStr += `X(${r},${c})[${flatX[idx].toFixed(1)}] * W[${flatW[idx].toFixed(2)}] = ${val.toFixed(3)}\\n`;
+            let fullMatrixStr = "";
+            for(let r=0; r<5; r++) {
+                let rowSum = 0;
+                let rowTerms = `R${r.toString().padStart(2,'0')}: `;
+                for(let c=0; c<28; c++) {
+                    const i = r * 28 + c;
+                    const val = flatX[i] * flatW[i];
+                    rowSum += val;
+                    rowTerms += `${flatX[i].toFixed(1)}*${flatW[i].toFixed(1)}+`;
+                }
+                fullMatrixStr += rowTerms.slice(0,-1) + ` = [${rowSum.toFixed(2)}]\\n`;
             }
-            calcListText.setAttribute('value', calcStr + "...and more 759 items");
+            calcListText.setAttribute('value', fullMatrixStr);
 
-            // 中央：重み更新
+            // 正面：重み更新
             const weights = data.weights.flat();
             bars.forEach((bar, i) => {
                 const w = weights[i];
-                const h = Math.abs(w) * 12 + 0.01;
+                const h = Math.abs(w) * 15 + 0.01;
                 bar.setAttribute('height', h);
                 bar.setAttribute('rotation', '90 0 0'); 
-                // Z方向：w>0なら手前(-) w<0なら奥(+) ※A-Frameの座標系に合わせて調整
-                const zPos = (w >= 0 ? -h/2 : h/2);
+                const zPos = (w >= 0 ? h/2 : -h/2);
                 bar.setAttribute('position', {x: labels[i].x, y: labels[i].y, z: zPos});
-                bar.setAttribute('color', w >= 0 ? "#44F" : "#F44");
+                bar.setAttribute('color', w >= 0 ? "#00AAFF" : "#FF3300");
 
-                // 座標と数値ラベル
                 const r = Math.floor(i/28); const c = i%28;
-                labels[i].el.setAttribute('value', `${r},${c}\\n${w.toFixed(3)}`);
+                labels[i].el.setAttribute('value', `${w.toFixed(2)}`);
                 labels[i].el.setAttribute('position', `${labels[i].x} ${labels[i].y} ${w >= 0 ? -h - 0.1 : h + 0.1}`);
             });
         });
@@ -146,7 +146,6 @@ def train_loop():
     train_loader = torch.utils.data.DataLoader(
         datasets.MNIST('./data', train=True, download=True, transform=transforms.ToTensor()),
         batch_size=1, shuffle=True)
-
     step = 0
     correct_count = 0
     for epoch in range(5):
@@ -184,7 +183,7 @@ def train_loop():
                     'step': step,
                     'loss': float(loss)
                 })
-                time.sleep(0.5) # 計算をじっくり見るために少し低速化
+                time.sleep(1.5)
 
 @app.route('/')
 def index(): return render_template_string(HTML_TEMPLATE)
@@ -192,5 +191,4 @@ def index(): return render_template_string(HTML_TEMPLATE)
 if __name__ == '__main__':
     local_ip = socket.gethostbyname(socket.gethostname())
     threading.Thread(target=train_loop, daemon=True).start()
-    print(f"\nConnect to: https://{local_ip}:5004\n")
-    socketio.run(app, host='0.0.0.0', port=5004, ssl_context='adhoc')
+    socketio.run(app, host='0.0.0.0', port=5006, ssl_context='adhoc')
