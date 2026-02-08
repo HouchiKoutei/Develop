@@ -44,19 +44,17 @@ def build_folder_name(detected_bg, detected_objs):
     return f"{bg_part}({obj_str})" if obj_str else f"{bg_part}"
 
 def resolve_click_targets(results, target_list):
-    """指定されたターゲットリスト順に座標を計算。target_list: ["酒", ("ボタン", 2)]"""
+    """指定順に座標を計算"""
     click_points = []
     for item in target_list:
         label = item[0] if isinstance(item, (list, tuple)) else item
         index = item[1] if isinstance(item, (list, tuple)) else 1
-        
         coords = []
         for box in results.boxes:
             cls_id = int(box.cls[0])
             if results.names[cls_id] == label:
                 bx, by, _, _ = box.xywh[0].tolist()
                 coords.append((int(bx), int(by)))
-        
         if 1 <= index <= len(coords):
             click_points.append(coords[index - 1])
     return click_points
@@ -122,7 +120,7 @@ def run_auto_sorting(config, bg_classes, obj_classes):
         return print("[!] モデルがないため分別をスキップします。")
 
     model = YOLO(config['model_path'])
-    num_bg = len(bg_classes)
+    num_bg = len(bg_classes) # 背景クラスの数を確認
     target_files = []
     for ext in ["*.jpg", "*.png", "*.jpeg", "*.JPG", "*.PNG"]:
         target_files.extend(glob.glob(os.path.join(config['sort_target_dir'], ext)))
@@ -135,26 +133,29 @@ def run_auto_sorting(config, bg_classes, obj_classes):
             for box in results.boxes:
                 cls_id = int(box.cls[0])
                 name = results.names[cls_id]
+                # IDが背景クラス数未満なら背景、それ以上ならオブジェクト
                 if cls_id < num_bg:
                     if det_bg is None: det_bg = name
-                else: det_objs.add(name)
+                else:
+                    det_objs.add(name)
             
+            # 背景と物の両方を使ってフォルダ名を生成
             f_name = build_folder_name(det_bg, det_objs)
             if f_name:
                 dest_dir = os.path.join(config['sort_target_dir'], f_name)
                 os.makedirs(dest_dir, exist_ok=True)
                 shutil.move(img_path, os.path.join(dest_dir, os.path.basename(img_path)))
-        except Exception as e: continue
+        except Exception: continue
     print(f"[*] 分別完了")
-
+    
 def run_click_test(config):
-    """合成画像を使用したクリックテスト"""
-    print("\n>>> 【機能2】自動クリックテストを開始します")
-    if not os.path.exists(config['model_path']): return
+    """精度テストを実行し、精度スコア(0-100)を返す"""
+    print("\n>>> 【内部テスト】推論精度を確認中...")
+    if not os.path.exists(config['model_path']): return 0
     model = YOLO(config['model_path'])
     success = 0
     imgs = glob.glob(os.path.join(config['dataset_root'], "images/train/*.jpg"))
-    if not imgs: return
+    if not imgs: return 0
     samples = random.sample(imgs, min(len(imgs), config['test_count']))
     for p in samples:
         lab = p.replace("images", "labels").replace(".jpg", ".txt")
@@ -172,10 +173,28 @@ def run_click_test(config):
     rate = (success/len(samples))*100
     with open(config['log_path'], "a") as f:
         f.write(f"[{datetime.datetime.now()}] Rate:{rate:.2f}%\n")
-    print(f"[*] テスト成功率: {rate:.2f}%")
+    print(f"[*] 現在の精度スコア: {rate:.2f}%")
+    return rate
+
+def run_live_visual_test(config, system):
+    """実機ウィンドウ表示テスト"""
+    print("\n>>> 【実機テスト】画像を画面に表示して認識・クリックします")
+    imgs = glob.glob(os.path.join(config['dataset_root'], "images/train/*.jpg"))
+    if not imgs: return
+    test_img = cv2.imread(random.choice(imgs))
+    win_name = "AI_VISUAL_TEST"
+    cv2.namedWindow(win_name, cv2.WINDOW_AUTOSIZE)
+    cv2.moveWindow(win_name, 100, 100)
+    cv2.imshow(win_name, test_img)
+    cv2.waitKey(1000)
+    print("[*] 画像表示中... 3秒後にクリックテストを実行します。")
+    import time
+    time.sleep(3)
+    system.capture_and_click([]) # 検出したものを全てクリックする
+    cv2.destroyAllWindows()
 
 # ==========================================
-# 3. 統合管理クラス (AIAutomation)
+# 3. 統合管理クラス
 # ==========================================
 
 class AIAutomation:
@@ -191,16 +210,20 @@ class AIAutomation:
         return self._model
 
     def capture_and_click(self, target_list):
-        """デスクトップキャプチャと指定順クリック"""
-        if not self.model: return print("[!] モデルがありません")
+        if not self.model: return
         screen = np.array(ImageGrab.grab())
         screen_bgr = cv2.cvtColor(screen, cv2.COLOR_RGB2BGR)
         results = self.model(screen_bgr, conf=self.config['conf_threshold'], verbose=False)[0]
-        points = resolve_click_targets(results, target_list)
+        
+        if not target_list: # テスト用：検出された全オブジェクト
+            points = [(int(b.xywh[0][0]), int(b.xywh[0][1])) for b in results.boxes]
+        else:
+            points = resolve_click_targets(results, target_list)
+            
         for x, y in points:
             ctypes.windll.user32.SetCursorPos(x, y)
-            ctypes.windll.user32.mouse_event(2, 0, 0, 0, 0) # Down
-            ctypes.windll.user32.mouse_event(4, 0, 0, 0, 0) # Up
+            ctypes.windll.user32.mouse_event(2, 0, 0, 0, 0)
+            ctypes.windll.user32.mouse_event(4, 0, 0, 0, 0)
             print(f"[*] Clicked: ({x}, {y})")
 
     def run_file_sorting(self):
@@ -213,41 +236,65 @@ class AIAutomation:
         self._model = None # 次回利用時にリロード
 
 # ==========================================
-# 4. メイン処理 (Main Process)
+# 4. メイン処理
 # ==========================================
 
 def main_process(config):
-    # クラス初期化
     system = AIAutomation(config)
     
-    # 1. 冒頭の分別確認
-    if input("今すぐ分別を実行しますか？ (y/n): ").lower() == 'y':
+    # --- モード選択フェーズ ---
+    print("=== AI Image Recognition System ===")
+    ans_sort = input("1. フォルダ分別を実行しますか？ (y/n): ").lower()
+    train_mode = input("2. 学習モードを選択 (1:単発 / 2:目標精度に達するまでループ / 0:スキップ): ")
+    
+    target_accuracy = 95.0 # デフォルト
+    if train_mode == '2':
+        val = input(f"   - 目標とする精度(%)を入力してください [デフォルト: {target_accuracy}]: ")
+        if val.strip() != "":
+            try:
+                target_accuracy = float(val)
+            except ValueError:
+                print(f"[!] 数値として認識できませんでした。デフォルトの {target_accuracy}% を使用します。")
+
+    # 実行1: 分別
+    if ans_sort == 'y':
         system.run_file_sorting()
 
-    # クラス名の確定とYAML更新
+    # 前準備 (クラス名の確定とYAML更新)
     bg_classes, obj_classes = system.bg_classes, system.obj_classes
     if not bg_classes: return print("[!] 背景クラスが見つかりません。")
     all_classes = bg_classes + obj_classes
     generate_data_yaml(config, all_classes)
 
-    model_exists = os.path.exists(config['model_path'])
+    # 実行2: 学習ループ
+    if train_mode in ['1', '2']:
+        while True:
+            create_synthetic_data(config, system.bg_classes, system.obj_classes)
+            run_training(config)
+            system._model = None # 最新モデルのリロード
+            
+            if train_mode == '1': 
+                run_click_test(config) # 単発の場合は確認のみして終了
+                break
+            
+            current_acc = run_click_test(config)
+            if current_acc >= target_accuracy:
+                print(f"[SUCCESS] 目標精度 {target_accuracy}% を達成しました。")
+                break
+            else:
+                print(f"[RETRY] 現在 {current_acc:.2f}%。目標 {target_accuracy}% まで再学習します。")
 
-    if not model_exists or config['initial_score'] == 0:
-        print("\n>>> 【学習モード起動】")
-        system.run_training_cycle()
-    else:
-        run_click_test(config)
-
-        # クリック操作の実行
+    # 実行3: 実機テストと運用
+    if os.path.exists(config['model_path']):
+        # 実機テスト
+        run_live_visual_test(config, system)
+        
+        # 本番シーケンス
         target_sequence = [("Icon_放置少女V", 1), "酒", "1010_return"]
-        print("3秒後に画面認識クリックを開始します...")
+        print("\n>>> 指定された操作シーケンスを開始します...")
         import time
-        time.sleep(3)
+        time.sleep(1)
         system.capture_and_click(target_sequence)
-
-        # 最後に運用後学習
-        print("\n>>> 【運用後学習】精度向上のためデータを生成し学習します")
-        system.run_training_cycle()
 
 if __name__ == "__main__":
     app_config = {
@@ -264,8 +311,7 @@ if __name__ == "__main__":
         "epochs": 10,
         "batch_size": 16,
         "device": "cpu",
-        "initial_score": 100,
-        "test_count": 100,
-        "conf_threshold": 0.5
+        "conf_threshold": 0.5,
+        "test_count": 50
     }
     main_process(app_config)
