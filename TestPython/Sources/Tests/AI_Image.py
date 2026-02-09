@@ -14,13 +14,52 @@ from ultralytics import YOLO
 # 1. 純粋関数群 (Pure Logic)
 # ==========================================
 
-def get_class_names(config):
-    """フォルダ構成から動的にクラス名を取得"""
+def load_or_update_master_classes(config):
+    """マスタリストを読み込み、新規フォルダがあれば末尾に追記する"""
+    master_path = config['master_list_path']
+    
+    # 現在のフォルダ構成をスキャン
     bg_root = os.path.abspath(config['raw_bg_dir'])
     obj_root = os.path.abspath(config['raw_obj_dir'])
-    bg_classes = sorted([os.path.basename(d) for d in glob.glob(os.path.join(bg_root, "*")) if os.path.isdir(d)])
-    obj_classes = sorted([os.path.basename(d) for d in glob.glob(os.path.join(obj_root, "*")) if os.path.isdir(d)])
-    return bg_classes, obj_classes
+    found_bg = sorted([os.path.basename(d) for d in glob.glob(os.path.join(bg_root, "*")) if os.path.isdir(d)])
+    found_obj = sorted([os.path.basename(d) for d in glob.glob(os.path.join(obj_root, "*")) if os.path.isdir(d)])
+    
+    # マスタリストの読み込み
+    master_bg = []
+    master_obj = []
+    
+    if os.path.exists(master_path):
+        with open(master_path, 'r', encoding='utf-8') as f:
+            lines = [line.strip() for line in f.readlines() if line.strip()]
+            # 背景と物を分けるためのセパレータ（[OBJECTS]など）を設ける運用も可能ですが、
+            # 今回はシンプルに、既存リストにあるものはそのまま、ないものは末尾に追加します。
+            # ※本来は背景と物を厳密に分けたいところですが、運用上「一度決まったIDを変えない」ことを優先します。
+            master_all = lines
+    else:
+        master_all = []
+
+    # 未登録の背景を追加
+    for b in found_bg:
+        if b not in master_all:
+            master_all.append(b)
+            print(f"[*] 新規背景クラスを登録: {b}")
+    
+    # 未登録のオブジェクトを追加
+    for o in found_obj:
+        if o not in master_all:
+            master_all.append(o)
+            print(f"[*] 新規オブジェクトクラスを登録: {o}")
+
+    # 保存
+    with open(master_path, 'w', encoding='utf-8') as f:
+        f.write("\n".join(master_all))
+    
+    # YOLO用に背景クラスのリストと、オブジェクトクラスのリストを現在のマスタから再整理
+    # (背景クラスが先頭に来るように管理するのが自動分別のために必要です)
+    bg_classes = [c for c in master_all if c in found_bg]
+    obj_classes = [c for c in master_all if c in found_obj]
+    
+    return master_all, bg_classes, obj_classes
 
 def generate_data_yaml(config, all_classes):
     """data.yamlを自動生成"""
@@ -60,19 +99,21 @@ def resolve_click_targets(results, target_list):
     return click_points
 
 # ==========================================
-# 2. 副作用関数群 (I/O & Execution)
+# 2. 副作用関数群 (ID指定をマスタ依存に修正)
 # ==========================================
 
-def create_synthetic_data(config, bg_classes, obj_classes):
-    """教師データを生成"""
+def create_synthetic_data(config, all_classes, bg_classes, obj_classes):
+    """教師データを生成（マスタリストのIDを使用）"""
     os.makedirs(os.path.join(config['dataset_root'], "images/train"), exist_ok=True)
     os.makedirs(os.path.join(config['dataset_root'], "labels/train"), exist_ok=True)
     exts = ["*.jpg", "*.jpeg", "*.png", "*.JPG", "*.PNG"]
-    num_bg = len(bg_classes)
 
     for i in range(config['num_synth_images']):
-        bg_idx = random.randint(0, num_bg - 1)
-        bg_dir = os.path.join(config['raw_bg_dir'], bg_classes[bg_idx])
+        # 背景の選択とID取得
+        bg_name = random.choice(bg_classes)
+        bg_idx = all_classes.index(bg_name) # マスタ内のID
+        
+        bg_dir = os.path.join(config['raw_bg_dir'], bg_name)
         bg_files = []
         for e in exts: bg_files.extend(glob.glob(os.path.join(bg_dir, e)))
         if not bg_files: continue
@@ -82,9 +123,10 @@ def create_synthetic_data(config, bg_classes, obj_classes):
         labels = [f"{bg_idx} 0.5 0.5 1.0 1.0"]
 
         for _ in range(random.randint(config['min_objs'], config['max_objs'])):
-            obj_idx = random.randint(0, len(obj_classes) - 1)
-            target_id = num_bg + obj_idx
-            obj_dir = os.path.join(config['raw_obj_dir'], obj_classes[obj_idx])
+            obj_name = random.choice(obj_classes)
+            target_id = all_classes.index(obj_name) # マスタ内のID
+            
+            obj_dir = os.path.join(config['raw_obj_dir'], obj_name)
             obj_files = []
             for e in exts: obj_files.extend(glob.glob(os.path.join(obj_dir, e)))
             if not obj_files: continue
@@ -113,14 +155,14 @@ def run_training(config):
         epochs=config['epochs'], batch=config['batch_size'], device=config['device'], exist_ok=True
     )
 
-def run_auto_sorting(config, bg_classes, obj_classes):
-    """自動分別実行"""
+def run_auto_sorting(config, all_classes, bg_classes):
+    """自動分別実行（マスタIDで背景か物かを判定）"""
     print("\n>>> 【機能1】自動分別を開始します")
     if not os.path.exists(config['model_path']):
-        return print("[!] モデルがないため分別をスキップします。")
-
+        return print("[!] モデルがないためスキップ。")
+    
     model = YOLO(config['model_path'])
-    num_bg = len(bg_classes) # 背景クラスの数を確認
+    
     target_files = []
     for ext in ["*.jpg", "*.png", "*.jpeg", "*.JPG", "*.PNG"]:
         target_files.extend(glob.glob(os.path.join(config['sort_target_dir'], ext)))
@@ -131,15 +173,12 @@ def run_auto_sorting(config, bg_classes, obj_classes):
             results = model(img_path, conf=config['conf_threshold'], verbose=False)[0]
             det_bg, det_objs = None, set()
             for box in results.boxes:
-                cls_id = int(box.cls[0])
-                name = results.names[cls_id]
-                # IDが背景クラス数未満なら背景、それ以上ならオブジェクト
-                if cls_id < num_bg:
+                name = results.names[int(box.cls[0])]
+                if name in bg_classes:
                     if det_bg is None: det_bg = name
                 else:
                     det_objs.add(name)
             
-            # 背景と物の両方を使ってフォルダ名を生成
             f_name = build_folder_name(det_bg, det_objs)
             if f_name:
                 dest_dir = os.path.join(config['sort_target_dir'], f_name)
@@ -200,7 +239,8 @@ def run_live_visual_test(config, system):
 class AIAutomation:
     def __init__(self, config):
         self.config = config
-        self.bg_classes, self.obj_classes = get_class_names(config)
+        # ここでマスタリストを更新・確定させる
+        self.all_classes, self.bg_classes, self.obj_classes = load_or_update_master_classes(config)
         self._model = None
 
     @property
@@ -227,13 +267,13 @@ class AIAutomation:
             print(f"[*] Clicked: ({x}, {y})")
 
     def run_file_sorting(self):
-        run_auto_sorting(self.config, self.bg_classes, self.obj_classes)
+        run_auto_sorting(self.config, self.all_classes, self.bg_classes)
 
     def run_training_cycle(self):
         print("\n>>> 学習サイクル開始")
-        create_synthetic_data(self.config, self.bg_classes, self.obj_classes)
+        create_synthetic_data(self.config, self.all_classes, self.bg_classes, self.obj_classes)
         run_training(self.config)
-        self._model = None # 次回利用時にリロード
+        self._model = None
 
 # ==========================================
 # 4. メイン処理
@@ -242,47 +282,27 @@ class AIAutomation:
 def main_process(config):
     system = AIAutomation(config)
     
-    # --- モード選択フェーズ ---
-    print("=== AI Image Recognition System ===")
+    print("=== AI Image Recognition System (Master List Mode) ===")
     ans_sort = input("1. フォルダ分別を実行しますか？ (y/n): ").lower()
-    train_mode = input("2. 学習モードを選択 (1:単発 / 2:目標精度に達するまでループ / 0:スキップ): ")
+    train_mode = input("2. 学習モードを選択 (1:単発 / 2:目標精度ループ / 0:スキップ): ")
     
-    target_accuracy = 95.0 # デフォルト
+    target_accuracy = 95.0
     if train_mode == '2':
-        val = input(f"   - 目標とする精度(%)を入力してください [デフォルト: {target_accuracy}]: ")
-        if val.strip() != "":
-            try:
-                target_accuracy = float(val)
-            except ValueError:
-                print(f"[!] 数値として認識できませんでした。デフォルトの {target_accuracy}% を使用します。")
+        val = input(f"   - 目標精度(%) [デフォルト: {target_accuracy}]: ")
+        if val.strip(): target_accuracy = float(val)
 
-    # 実行1: 分別
     if ans_sort == 'y':
         system.run_file_sorting()
 
-    # 前準備 (クラス名の確定とYAML更新)
-    bg_classes, obj_classes = system.bg_classes, system.obj_classes
-    if not bg_classes: return print("[!] 背景クラスが見つかりません。")
-    all_classes = bg_classes + obj_classes
-    generate_data_yaml(config, all_classes)
+    generate_data_yaml(config, system.all_classes)
 
-    # 実行2: 学習ループ
     if train_mode in ['1', '2']:
         while True:
-            create_synthetic_data(config, system.bg_classes, system.obj_classes)
-            run_training(config)
-            system._model = None # 最新モデルのリロード
-            
-            if train_mode == '1': 
-                run_click_test(config) # 単発の場合は確認のみして終了
-                break
-            
+            system.run_training_cycle()
             current_acc = run_click_test(config)
-            if current_acc >= target_accuracy:
-                print(f"[SUCCESS] 目標精度 {target_accuracy}% を達成しました。")
+            if train_mode == '1' or current_acc >= target_accuracy:
                 break
-            else:
-                print(f"[RETRY] 現在 {current_acc:.2f}%。目標 {target_accuracy}% まで再学習します。")
+            print(f"[RETRY] 現在 {current_acc:.2f}% < 目標 {target_accuracy}%")
 
     # 実行3: 実機テストと運用
     if os.path.exists(config['model_path']):
@@ -298,6 +318,7 @@ def main_process(config):
 
 if __name__ == "__main__":
     app_config = {
+        "master_list_path": "classes_master.txt", # マスタリストのファイル名
         "dataset_root": "dataset",
         "yaml_name": "data.yaml",
         "raw_bg_dir": r"D:\Files\all",
