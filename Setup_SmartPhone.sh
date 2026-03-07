@@ -1,10 +1,3 @@
----
-
-## 📜 更新版：Setup_SmartPhone.sh
-
-code-server（VS Code）を自動インストールするようにスクリプトを書き換えます。以下の内容を `Setup_SmartPhone.sh` として保存してください。
-
-```bash
 #!/data/data/com.termux/files/usr/bin/bash
 
 # パッケージの更新
