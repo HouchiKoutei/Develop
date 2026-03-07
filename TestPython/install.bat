@@ -1,67 +1,78 @@
-rem Detect Python dictionary
-for /d %%d in ("C:\Users\a2003408\Documents\ProgramFiles\Coding\WinPython64\python-3.6.5.amd64\","D:\ProgramFiles\Coding\WPy64-38100\python-3.8.10.amd64\","D:\ProgramFiles\Coding\WPy64-31220\python-3.12.2.amd64\") do (
-    echo start find: %%d
-    if exist "%%dpython.exe" (
+@echo off
+setlocal enabledelayedexpansion
+
+rem ---------------------------------------------------------
+rem  Detect Python installation directory
+rem ---------------------------------------------------------
+
+for %%d in (
+    "C:\Users\a2003408\Documents\ProgramFiles\Coding\WPy64-38100\python-3.8.10.amd64"
+    "D:\ProgramFiles\Coding\WPy64-38100\python-3.8.10.amd64"
+    "D:\ProgramFiles\Coding\WPy64-31220\python-3.12.2.amd64"
+    "D:\ProgramFiles\Coding\WPy64-313110\python"
+) do (
+    echo Checking: %%d
+    if exist "%%d\python.exe" (
         set PYTHON_DIR=%%d
         echo Python directory found: %%d
     )
 )
 
-rem Display error and exit if Python is not found
+rem ---------------------------------------------------------
+rem  Error if Python not found
+rem ---------------------------------------------------------
 if not defined PYTHON_DIR (
-    echo Python not found!
+    echo ERROR: Python not found in any of the listed directories.
     exit /b 1
 )
 
-rem Move to Python installation directory and install packages
+rem ---------------------------------------------------------
+rem  Move to Python directory
+rem ---------------------------------------------------------
 echo Current directory: %CD%
 pushd "%PYTHON_DIR%"
-echo Current directory: %CD%
-python -m pip install --upgrade pythonnet
-python -m pip install -U pip
-python -m pip install --upgrade pip
+echo Switched to directory: %CD%
 
-python -m pip install pyautogui
-python -m pip install Pillow
-python -m pip install pynput
+rem ---------------------------------------------------------
+rem  Install packages
+rem ---------------------------------------------------------
 
-python -m pip install pyocr
+rem Use the detected Python executable to ensure packages install into the correct interpreter
+set "PYTHON_EXE=%PYTHON_DIR%\python.exe"
 
-python -m pip install xmltodict
-python -m pip install dicttoxml
+%PYTHON_EXE% -m pip install --upgrade pythonnet
+%PYTHON_EXE% -m pip install -U pip
+%PYTHON_EXE% -m pip install --upgrade pip
 
-python -m pip install dicttoxml
+rem --- 1. Core build tools ---
+%PYTHON_EXE% -m pip install -U pip wheel setuptools cython
+%PYTHON_EXE% -m pip install docutils pygments pypiwin32 dataclasses pythonnet portalocker cryptography
 
-python -m pip install opencv-python
-python -m pip install chardet
+rem --- 2. AI / Machine Learning / NLP ---
+%PYTHON_EXE% -m pip install torchvision tensorboard sentence_transformers
+%PYTHON_EXE% -m pip install ollama tavily-python tiktoken pydantic
 
-python -m pip install pytk
-python -m pip install --upgrade pip wheel setuptools
-python -m pip install docutils pygments pypiwin32 kivy.deps.glew
-python -m pip install kivy.deps.gstreamer
-python -m pip install kivy
-python -m pip install kivymd
-python -m pip install japanize-kivy
-python -m pip install watchdog
-python -m pip install keyboard
-python -m pip install pyreadline
-python -m pip install pandas
-python -m pip install json_log_formatter
-python -m pip install python-json-logger
-python -m pip install cython
-python -m pip install pyjnius
-python -m pip install asynckivy
-python -m pip install plyer
-python -m pip install kivymd
-python -m pip install portalocker
-python -m pip install https://github.com/pyinstaller/pyinstaller/archive/develop.tar.gz
-python -m pip install pygetwindow psutil
+rem --- 3. Image processing / OCR / Capture ---
+%PYTHON_EXE% -m pip install Pillow opencv-python imagehash pyocr mss
 
-python -m pip install gym
-python -m pip install torch
-python -m pip install stable_baselines3
-python -m pip install DQN
+rem --- 4. Automation / OS control ---
+%PYTHON_EXE% -m pip install pyautogui pynput keyboard pygetwindow psutil watchdog pyreadline ultralytics
 
-echo Please set VSCode Python:Default interpreter Path 
+rem --- 5. Kivy GUI framework ---
+%PYTHON_EXE% -m pip install kivy.deps.glew kivy.deps.gstreamer
+%PYTHON_EXE% -m pip install kivy kivymd asynckivy japanize-kivy plyer pyjnius
+
+rem --- 6. Data processing / Serialization / Communication ---
+%PYTHON_EXE% -m pip install pandas xmltodict dicttoxml pyopenssl
+%PYTHON_EXE% -m pip install json_log_formatter python-json-logger chardet
+%PYTHON_EXE% -m pip install pymodbus pyserial flask flask_socketio PyYAML
+
+rem --- 7. Development tools ---
+%PYTHON_EXE% -m pip install https://github.com/pyinstaller/pyinstaller/archive/develop.tar.gz
+
+echo ---------------------------------------------------------
+echo VSCode Python Interpreter Path:
 echo %PYTHON_DIR%\python.exe
+echo ---------------------------------------------------------
+
 pause
