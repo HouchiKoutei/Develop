@@ -28,13 +28,11 @@ pkg update -y
 pkg install -y libc++ libandroid-support nodejs-lts curl python git
 
 echo "[3/5] code-serverをインストール..."
-# tarballをダウンロード（未取得の場合のみ）
 if [ ! -f "$TARBALL" ]; then
     mkdir -p "$(dirname $TARBALL)"
     curl -fL "https://github.com/coder/code-server/releases/download/v${VERSION}/code-server-${VERSION}-linux-arm64.tar.gz" \
         -o "$TARBALL"
 fi
-# 既存ディレクトリを削除して展開
 rm -rf "$CS_DIR"
 mkdir -p "$HOME/.local/lib" "$HOME/.local/bin"
 tar -C "$HOME/.local/lib" \
@@ -53,31 +51,31 @@ echo "[5/5] argon2モック適用..."
 cp "$MOCK_PATH" "$CS_DIR/node_modules/argon2/argon2.cjs"
 rm -rf "$MOCK_DIR"
 
+# 環境変数設定
 export LD_LIBRARY_PATH="$PREFIX/lib:$LD_LIBRARY_PATH"
 export PATH="$HOME/.local/bin:$PATH"
 
-# .bashrcに永続化
+# .bashrcに永続化（なければ作成）
+touch ~/.bashrc
 grep -q 'LD_LIBRARY_PATH.*PREFIX' ~/.bashrc || \
     echo 'export LD_LIBRARY_PATH="$PREFIX/lib:$LD_LIBRARY_PATH"' >> ~/.bashrc
 grep -q 'PATH.*local/bin' ~/.bashrc || \
     echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
 
-echo "================================"
-echo "セットアップ完了！"
-echo "URL: http://127.0.0.1:8080"
-PASSWORD=$(grep 'password:' ~/.config/code-server/config.yaml 2>/dev/null | awk '{print $2}')
-echo "パスワード: ${PASSWORD:-起動後に生成}"
-echo "================================"
-
 # code-serverをバックグラウンドで起動
-pkill -f code-server 2>/dev/null; sleep 1
-code-server &
+pkill -f code-server 2>/dev/null || true
+sleep 1
+"$HOME/.local/bin/code-server" &
 sleep 3
 
-# ブラウザを開く
-PASSWORD=$(grep 'password:' ~/.config/code-server/config.yaml | awk '{print $2}')
+PASSWORD=$(grep 'password:' ~/.config/code-server/config.yaml 2>/dev/null | awk '{print $2}')
+echo "================================"
+echo "セットアップ完了！"
+echo "URL:      http://127.0.0.1:8080"
 echo "パスワード: $PASSWORD"
+echo "================================"
+
+# ブラウザを開く
 termux-open-url "http://127.0.0.1:8080"
 
-# フォアグラウンドで待機
 wait

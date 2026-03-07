@@ -13,12 +13,15 @@ HouchiKoutei's develop lab
 
 ### 1. 必要なアプリをインストール
 
-以下のリンクから、2つの主要アプリをインストールしてください。
+以下のリンクから、アプリをインストールしてください。
 
 | アプリ | リンク | 備考 |
 | --- | --- | --- |
 | **Termux** | [GitHub (最新版)](https://github.com/termux/termux-app/releases) | **※Google Play版は非推奨** |
-| **Acode** | [Google Play](https://play.google.com/store/apps/details?id=com.foxdebug.acode) | 高機能エディタ（**有料版/アプリ内課金あり**） |
+
+
+ **※有料でAcodeというアプリもあるようです。** 
+  [Google Play　Acode](https://play.google.com/store/apps/details?id=com.foxdebug.acode) 
 
 ### 2. セットアップスクリプトの実行
 
@@ -33,6 +36,6 @@ curl -O https://raw.githubusercontent.com/HouchiKoutei/Develop/main/Setup_SmartP
 
 **【スクリプトの直リンク】**
 ブラウザで内容を確認する場合はこちら：
-`https://raw.githubusercontent.com/HouchiKoutei/Develop/main/setup.sh`
+`https://raw.githubusercontent.com/HouchiKoutei/Develop/main/Setup_SmartPhone.sh`
 
 ---
