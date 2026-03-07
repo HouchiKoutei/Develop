@@ -1,0 +1,39 @@
+names:
+  0: Camera
+  1: Chat
+  2: PC
+  3: PC画面
+  4: ScreenRecorder
+  5: エクセル画面
+  6: ゲーム画面
+  7: スマホ画面
+  8: スマホ画面(Icon_放置少女ZZ)
+  9: 不明な背景
+  10: 乗り物内
+  11: 人
+  12: 室内
+  13: 店内
+  14: 放置少女ゲーム画面
+  15: 書類
+  16: 本
+  17: 漫画
+  18: 画像
+  19: 競馬場
+  20: 絵
+  21: 自然風景
+  22: 街
+  23: 観光地
+  24: 酒
+  25: 食事
+  26: 飲料
+  27: 動物
+  28: 図表
+  29: 地図
+  30: 機械
+  31: Desktop
+  32: Screenrecord
+  33: Screenshots
+  34: ドキュメント
+path: D:\NowWorksGit\Develop\dataset
+train: images/train
+val: images/train

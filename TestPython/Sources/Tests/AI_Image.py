@@ -9,6 +9,8 @@ import ctypes
 import numpy as np
 from PIL import Image, ImageGrab
 from ultralytics import YOLO
+import pyautogui
+from pathlib import Path
 
 # ==========================================
 # 1. 純粋関数群 (Pure Logic)
@@ -101,8 +103,17 @@ def resolve_click_targets(results, target_list):
 # ==========================================
 # 2. 副作用関数群 (ID指定をマスタ依存に修正)
 # ==========================================
-
 def create_synthetic_data(config, all_classes, bg_classes, obj_classes):
+    """教師データを生成（マスタリストのIDを使用）"""
+    
+    # ガード処理を追加
+    if not bg_classes:
+        print(f"[!] 背景クラスが見つかりません。ディレクトリを確認してください: {config['raw_bg_dir']}")
+        return
+    if not obj_classes:
+        print(f"[!] オブジェクトクラスが見つかりません。ディレクトリを確認してください: {config['raw_obj_dir']}")
+        return
+
     """教師データを生成（マスタリストのIDを使用）"""
     os.makedirs(os.path.join(config['dataset_root'], "images/train"), exist_ok=True)
     os.makedirs(os.path.join(config['dataset_root'], "labels/train"), exist_ok=True)
@@ -167,6 +178,11 @@ def run_auto_sorting(config, all_classes, bg_classes):
     for ext in ["*.jpg", "*.png", "*.jpeg", "*.JPG", "*.PNG"]:
         target_files.extend(glob.glob(os.path.join(config['sort_target_dir'], ext)))
 
+    if not target_files:
+        print("[*] 分別対象のファイルが見つかりませんでした。")
+        return
+
+    moved_count = 0
     for img_path in target_files:
         if not os.path.exists(img_path): continue
         try:
@@ -183,9 +199,18 @@ def run_auto_sorting(config, all_classes, bg_classes):
             if f_name:
                 dest_dir = os.path.join(config['sort_target_dir'], f_name)
                 os.makedirs(dest_dir, exist_ok=True)
-                shutil.move(img_path, os.path.join(dest_dir, os.path.basename(img_path)))
-        except Exception: continue
-    print(f"[*] 分別完了")
+                
+                # 移動処理とログ表示
+                file_name = os.path.basename(img_path)
+                shutil.move(img_path, os.path.join(dest_dir, file_name))
+                print(f" [MOVE] {file_name} -> {f_name}/")
+                moved_count += 1
+                
+        except Exception as e:
+            print(f" [!] 移動失敗 ({os.path.basename(img_path)}): {e}")
+            continue
+            
+    print(f"[*] 分別完了 (計 {moved_count} 個のファイルを整理しました)")
     
 def run_click_test(config):
     """精度テストを実行し、精度スコア(0-100)を返す"""
@@ -236,10 +261,57 @@ def run_live_visual_test(config, system):
 # 3. 統合管理クラス
 # ==========================================
 
+def find_position(target, system, confidence=0.8):
+    """
+    pathlibを使用して、/ を含むパスをOSに依存せず正しく扱う
+    """
+    target = target.strip()
+    
+    # 1. パスとしての判定
+    # 文字列をPathオブジェクトに変換
+    target_path = Path(target)
+    
+    # ファイル名として画像拡張子を持っているか、または実在するパスかをチェック
+    is_image_file = target_path.suffix.lower() in ['.png', '.jpg', '.jpeg', '.bmp']
+    
+    if is_image_file or target_path.exists():
+        # .resolve() を使うことで、スラッシュの向きをOSに合わせて解決し、絶対パスにする
+        abs_path = str(target_path.resolve())
+        
+        if target_path.exists():
+            print(f"[*] 画像ファイルとして探索中: {abs_path}")
+            try:
+                pos = pyautogui.locateCenterOnScreen(abs_path, confidence=confidence)
+                if pos:
+                    return (int(pos.x), int(pos.y))
+            except Exception as e:
+                print(f"[!] PyAutoGUIエラー: {e}")
+        else:
+            # 拡張子的にパスなのに、ファイルが物理的に見つからない場合
+            print(f"[!] 指定された画像パスが見つかりません: {abs_path}")
+        return None
+
+    # 2. YOLOのクラス名として探索
+    else:
+        print(f"[*] YOLOクラスとして探索中: {target}")
+        model = system.model
+        if not model: return None
+
+        screen = np.array(ImageGrab.grab())
+        screen_bgr = cv2.cvtColor(screen, cv2.COLOR_RGB2BGR)
+        results = model(screen_bgr, conf=system.config['conf_threshold'], verbose=False)[0]
+        
+        for box in results.boxes:
+            name = results.names[int(box.cls[0])]
+            if name == target:
+                bx, by, _, _ = box.xywh[0].tolist()
+                return (int(bx), int(by))
+        
+        return None
+    
 class AIAutomation:
     def __init__(self, config):
         self.config = config
-        # ここでマスタリストを更新・確定させる
         self.all_classes, self.bg_classes, self.obj_classes = load_or_update_master_classes(config)
         self._model = None
 
@@ -249,31 +321,86 @@ class AIAutomation:
             self._model = YOLO(self.config['model_path'])
         return self._model
 
-    def capture_and_click(self, target_list):
-        if not self.model: return
-        screen = np.array(ImageGrab.grab())
-        screen_bgr = cv2.cvtColor(screen, cv2.COLOR_RGB2BGR)
-        results = self.model(screen_bgr, conf=self.config['conf_threshold'], verbose=False)[0]
-        
-        if not target_list: # テスト用：検出された全オブジェクト
-            points = [(int(b.xywh[0][0]), int(b.xywh[0][1])) for b in results.boxes]
-        else:
-            points = resolve_click_targets(results, target_list)
-            
-        for x, y in points:
+    def find_and_click(self, target):
+        """
+        find_positionを使用して単一のターゲットを見つけ、クリックする
+        """
+        pos = find_position(target, self)
+        if pos:
+            x, y = pos
             ctypes.windll.user32.SetCursorPos(x, y)
-            ctypes.windll.user32.mouse_event(2, 0, 0, 0, 0)
-            ctypes.windll.user32.mouse_event(4, 0, 0, 0, 0)
-            print(f"[*] Clicked: ({x}, {y})")
+            ctypes.windll.user32.mouse_event(2, 0, 0, 0, 0) # Down
+            ctypes.windll.user32.mouse_event(4, 0, 0, 0, 0) # Up
+            print(f"[*] Clicked '{target}': ({x}, {y})")
+            return True
+        else:
+            print(f"[!] '{target}' が見つかりませんでした。")
+            return False
+
+    def capture_and_click(self, target_list):
+        """
+        target_listに含まれる要素（パス or クラス名）を順次クリック
+        """
+        if not self.model: 
+            print("[!] モデルがありません。")
+            return
+
+        for item in target_list:
+            # target_listが [("名前", 1), "パス"] などの形式に対応
+            target = item[0] if isinstance(item, (list, tuple)) else item
+            self.find_and_click(target)
+            import time
+            time.sleep(0.5)
 
     def run_file_sorting(self):
         run_auto_sorting(self.config, self.all_classes, self.bg_classes)
 
     def run_training_cycle(self):
         print("\n>>> 学習サイクル開始")
+        if not self.bg_classes or not self.obj_classes:
+            print("[!] bg_classes または obj_classes が空です。学習をスキップします。")
+            print(f"    bg_classes : {self.bg_classes}")
+            print(f"    obj_classes: {self.obj_classes}")
+            print(f"    raw_bg_dir : {self.config['raw_bg_dir']}")
+            print(f"    raw_obj_dir: {self.config['raw_obj_dir']}")
+            return
         create_synthetic_data(self.config, self.all_classes, self.bg_classes, self.obj_classes)
         run_training(self.config)
         self._model = None
+
+# ==========================================
+# 副作用関数群の修正
+# ==========================================
+
+def run_live_visual_test(config, system):
+    """実機ウィンドウ表示テスト: find_positionの動作確認"""
+    print("\n>>> 【実機テスト】find_positionの動作を確認します")
+    imgs = glob.glob(os.path.join(config['dataset_root'], "images/train/*.jpg"))
+    if not imgs: return
+    
+    # テスト用画像をランダム表示
+    test_img_path = random.choice(imgs)
+    test_img = cv2.imread(test_img_path)
+    win_name = "AI_VISUAL_TEST"
+    cv2.namedWindow(win_name, cv2.WINDOW_AUTOSIZE)
+    cv2.moveWindow(win_name, 100, 100)
+    cv2.imshow(win_name, test_img)
+    cv2.waitKey(1000)
+    
+    print("[*] 画像を表示しました。3秒後に認識テストを開始します。")
+    import time
+    time.sleep(3)
+
+    # 1. クラス名でのテスト（適当な登録済みクラス名を取得）
+    target_cls = system.all_classes[min(2, len(system.all_classes)-1)] 
+    print(f"--- テスト1: クラス名 '{target_cls}' で探索 ---")
+    system.find_and_click(target_cls)
+
+    # 2. ファイルパスでのテスト（表示中の画像をそのままパス指定）
+    print(f"--- テスト2: ファイルパス '{test_img_path}' で探索 ---")
+    system.find_and_click(test_img_path)
+
+    cv2.destroyAllWindows()
 
 # ==========================================
 # 4. メイン処理
@@ -282,27 +409,53 @@ class AIAutomation:
 def main_process(config):
     system = AIAutomation(config)
     
-    print("=== AI Image Recognition System (Master List Mode) ===")
+    print("=== AI Image Recognition System (Test First Mode) ===")
+    if os.path.exists(config['model_path']):
+        print("\n>>> [STEP 0] 起動時実機テストを開始します")
+        run_live_visual_test(config, system)
+        
+        # ついでに現在の設定での本番シーケンスも試したい場合はここで行う
+        if input("\nそのまま本番シーケンスの動作確認を行いますか？ (y/n): ").lower() == 'y':
+            target_sequence = [("Icon_放置少女V", 1), "酒", "1010_return","C:/Users/houch/Dropbox/Auto/AutoClick/Images/houchi/0000_account/0001/Click_0000ZZ_08.png"]
+            system.capture_and_click(target_sequence)
+    else:
+        print("\n[!] モデルが存在しないため、初回学習へ進みます。")
+
+    # ---------------------------------------------------------
+    # 【設定・分別フェーズ】
+    # ---------------------------------------------------------
     ans_sort = input("1. フォルダ分別を実行しますか？ (y/n): ").lower()
     train_mode = input("2. 学習モードを選択 (1:単発 / 2:目標精度ループ / 0:スキップ): ")
     
     target_accuracy = 95.0
     if train_mode == '2':
         val = input(f"   - 目標精度(%) [デフォルト: {target_accuracy}]: ")
-        if val.strip(): target_accuracy = float(val)
+        if val.strip(): 
+            try: target_accuracy = float(val)
+            except: pass
 
+    # 分別実行
     if ans_sort == 'y':
         system.run_file_sorting()
 
+    # YAML更新
     generate_data_yaml(config, system.all_classes)
 
+    # ---------------------------------------------------------
+    # 【長時間学習フェーズ】
+    # ここからは時間がかかるので、ユーザーは離席してもOK
+    # ---------------------------------------------------------
     if train_mode in ['1', '2']:
+        print("\n>>> 長時間学習フェーズに移行します。終了後は自動で待機状態になります。")
         while True:
             system.run_training_cycle()
             current_acc = run_click_test(config)
             if train_mode == '1' or current_acc >= target_accuracy:
+                print(f"\n[FINISH] 学習が完了しました。現在の内部精度: {current_acc:.2f}%")
                 break
-            print(f"[RETRY] 現在 {current_acc:.2f}% < 目標 {target_accuracy}%")
+            print(f"[RETRY] 精度目標未達 ({current_acc:.2f}% < {target_accuracy}%)。再学習中...")
+
+    print("\n[COMPLETE] すべての工程が終了しました。次回の起動時に新しいモデルでテストされます。")
 
     # 実行3: 実機テストと運用
     if os.path.exists(config['model_path']):
@@ -315,7 +468,6 @@ def main_process(config):
         import time
         time.sleep(1)
         system.capture_and_click(target_sequence)
-
 if __name__ == "__main__":
     app_config = {
         "master_list_path": "classes_master.txt", # マスタリストのファイル名
