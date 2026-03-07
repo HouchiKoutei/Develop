@@ -3,7 +3,11 @@ set -e
 
 VERSION="4.109.5"
 CS_DIR="$HOME/.local/lib/code-server-${VERSION}-linux-arm64"
-MOCK_PATH="/tmp/argon2_mock.cjs"
+
+# Termux環境に合わせた一時ファイルパスの設定
+MOCK_DIR="$HOME/.tmp"
+mkdir -p "$MOCK_DIR"
+MOCK_PATH="$MOCK_DIR/argon2_mock.cjs"
 
 echo "[1/6] argon2モックファイルの作成..."
 cat << 'EOF' > "$MOCK_PATH"
@@ -36,7 +40,6 @@ ln -sf "$PREFIX/bin/node" "$CS_DIR/lib/node"
 ln -sf "$PREFIX/bin/node" "$CS_DIR/node"
 
 echo "[5/6] argon2モック適用..."
-# インストール直後はディレクトリがない場合があるため作成を確認
 mkdir -p "$CS_DIR/node_modules/argon2/"
 cp "$MOCK_PATH" "$CS_DIR/node_modules/argon2/argon2.cjs"
 
