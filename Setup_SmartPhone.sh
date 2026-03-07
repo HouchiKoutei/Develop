@@ -3,6 +3,7 @@ set -e
 
 VERSION="4.109.5"
 CS_DIR="$HOME/.local/lib/code-server-${VERSION}-linux-arm64"
+TARBALL="$HOME/.cache/code-server/code-server-${VERSION}-linux-arm64.tar.gz"
 MOCK_DIR="$HOME/.setup_tmp"
 mkdir -p "$MOCK_DIR"
 MOCK_PATH="$MOCK_DIR/argon2_mock.cjs"
@@ -27,9 +28,20 @@ pkg update -y
 pkg install -y libc++ libandroid-support nodejs-lts curl python git
 
 echo "[3/5] code-serverをインストール..."
-if [ ! -d "$CS_DIR" ]; then
-    curl -fsSL https://code-server.dev/install.sh | sh
+# tarballをダウンロード（未取得の場合のみ）
+if [ ! -f "$TARBALL" ]; then
+    mkdir -p "$(dirname $TARBALL)"
+    curl -fL "https://github.com/coder/code-server/releases/download/v${VERSION}/code-server-${VERSION}-linux-arm64.tar.gz" \
+        -o "$TARBALL"
 fi
+# 既存ディレクトリを削除して展開
+rm -rf "$CS_DIR"
+mkdir -p "$HOME/.local/lib" "$HOME/.local/bin"
+tar -C "$HOME/.local/lib" \
+    --no-same-owner \
+    --warning=no-failed-read \
+    -xzf "$TARBALL" 2>/dev/null || true
+ln -sf "$CS_DIR/bin/code-server" "$HOME/.local/bin/code-server"
 
 echo "[4/5] ライブラリ・Node.jsリンク設定..."
 ln -sf $PREFIX/lib/libc++.so $PREFIX/lib/libstdc++.so.6
@@ -38,20 +50,34 @@ ln -sf "$PREFIX/bin/node" "$CS_DIR/lib/node"
 ln -sf "$PREFIX/bin/node" "$CS_DIR/node"
 
 echo "[5/5] argon2モック適用..."
-mkdir -p "$CS_DIR/node_modules/argon2/"
 cp "$MOCK_PATH" "$CS_DIR/node_modules/argon2/argon2.cjs"
-
 rm -rf "$MOCK_DIR"
 
 export LD_LIBRARY_PATH="$PREFIX/lib:$LD_LIBRARY_PATH"
 export PATH="$HOME/.local/bin:$PATH"
 
-termux-setup-storage
+# .bashrcに永続化
+grep -q 'LD_LIBRARY_PATH.*PREFIX' ~/.bashrc || \
+    echo 'export LD_LIBRARY_PATH="$PREFIX/lib:$LD_LIBRARY_PATH"' >> ~/.bashrc
+grep -q 'PATH.*local/bin' ~/.bashrc || \
+    echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
 
 echo "================================"
 echo "セットアップ完了！"
 echo "URL: http://127.0.0.1:8080"
-grep 'password:' ~/.config/code-server/config.yaml 2>/dev/null || echo "パスワード: 起動後に生成"
+PASSWORD=$(grep 'password:' ~/.config/code-server/config.yaml 2>/dev/null | awk '{print $2}')
+echo "パスワード: ${PASSWORD:-起動後に生成}"
 echo "================================"
 
-code-server
+# code-serverをバックグラウンドで起動
+pkill -f code-server 2>/dev/null; sleep 1
+code-server &
+sleep 3
+
+# ブラウザを開く
+PASSWORD=$(grep 'password:' ~/.config/code-server/config.yaml | awk '{print $2}')
+echo "パスワード: $PASSWORD"
+termux-open-url "http://127.0.0.1:8080"
+
+# フォアグラウンドで待機
+wait
