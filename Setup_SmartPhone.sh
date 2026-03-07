@@ -3,14 +3,12 @@ set -e
 
 VERSION="4.109.5"
 CS_DIR="$HOME/.local/lib/code-server-${VERSION}-linux-arm64"
-
-# Termux環境に合わせた一時ファイルパスの設定
-MOCK_DIR="$HOME/.tmp"
+MOCK_DIR="$HOME/.setup_tmp"
 mkdir -p "$MOCK_DIR"
 MOCK_PATH="$MOCK_DIR/argon2_mock.cjs"
 
-echo "[1/6] argon2モックファイルの作成..."
-cat << 'EOF' > "$MOCK_PATH"
+echo "[1/5] argon2モックファイルの作成..."
+cat > "$MOCK_PATH" << 'MOCK_EOF'
 const crypto = require('crypto');
 module.exports = {
   hash: async (plain, opts) => {
@@ -22,39 +20,38 @@ module.exports = {
   needsRehash: () => false,
   argon2i: 0, argon2d: 1, argon2id: 2
 };
-EOF
+MOCK_EOF
 
-echo "[2/6] パッケージインストール..."
+echo "[2/5] パッケージインストール..."
 pkg update -y
 pkg install -y libc++ libandroid-support nodejs-lts curl python git
 
-echo "[3/6] code-serverをインストール..."
+echo "[3/5] code-serverをインストール..."
 if [ ! -d "$CS_DIR" ]; then
     curl -fsSL https://code-server.dev/install.sh | sh
 fi
 
-echo "[4/6] ライブラリ・Node.jsリンク設定..."
+echo "[4/5] ライブラリ・Node.jsリンク設定..."
 ln -sf $PREFIX/lib/libc++.so $PREFIX/lib/libstdc++.so.6
 rm -f "$CS_DIR/lib/node" "$CS_DIR/node"
 ln -sf "$PREFIX/bin/node" "$CS_DIR/lib/node"
 ln -sf "$PREFIX/bin/node" "$CS_DIR/node"
 
-echo "[5/6] argon2モック適用..."
+echo "[5/5] argon2モック適用..."
 mkdir -p "$CS_DIR/node_modules/argon2/"
 cp "$MOCK_PATH" "$CS_DIR/node_modules/argon2/argon2.cjs"
 
-echo "[6/6] Python環境の微調整..."
-pip install --upgrade pip
+rm -rf "$MOCK_DIR"
+
+export LD_LIBRARY_PATH="$PREFIX/lib:$LD_LIBRARY_PATH"
+export PATH="$HOME/.local/bin:$PATH"
+
+termux-setup-storage
 
 echo "================================"
 echo "セットアップ完了！"
-echo "コマンド: code-server を入力して起動"
 echo "URL: http://127.0.0.1:8080"
+grep 'password:' ~/.config/code-server/config.yaml 2>/dev/null || echo "パスワード: 起動後に生成"
 echo "================================"
 
-# ストレージ権限の要求（ポップアップが出ます）
-termux-setup-storage
-
-# パスを通す
-export PATH="$HOME/.local/bin:$PATH"
 code-server
