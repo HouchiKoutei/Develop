@@ -6,10 +6,10 @@ echo " code-server Python デバッグ環境セットアップ"
 echo "================================================"
 
 # ----------------------------
-# [1/4] Open VSX をデフォルトに設定
+# [1/4] Open VSX の不要設定を除去
 # ----------------------------
 echo ""
-echo "[1/4] Open VSX Registryの設定..."
+echo "[1/4] config.yaml のクリーンアップ..."
 
 CONFIG_FILE="$HOME/.config/code-server/config.yaml"
 
@@ -18,18 +18,13 @@ if [ ! -f "$CONFIG_FILE" ]; then
     exit 1
 fi
 
-# すでに設定済みかチェック
-if grep -q "open-vsx.org" "$CONFIG_FILE"; then
-    echo "  → すでにOpen VSXが設定されています。スキップします。"
+# extensions-gallery 設定がある場合は削除（非対応のため）
+if grep -q "extensions-gallery" "$CONFIG_FILE"; then
+    # extensions-gallery ブロックを削除
+    sed -i '/# Open VSX Registry/,/item-url:.*open-vsx/d' "$CONFIG_FILE"
+    echo "  → 非対応のextensions-gallery設定を削除しました。"
 else
-    cat >> "$CONFIG_FILE" << 'YAML_EOF'
-
-# Open VSX Registry (MS Marketplace代替)
-extensions-gallery:
-  service-url: https://open-vsx.org/vscode/gallery
-  item-url: https://open-vsx.org/vscode/item
-YAML_EOF
-    echo "  → Open VSX設定を追加しました。"
+    echo "  → クリーンな状態です。スキップします。"
 fi
 
 # ----------------------------
@@ -46,28 +41,54 @@ else
 fi
 
 # ----------------------------
-# [3/4] Python拡張機能のインストール（Open VSX経由）
+# [3/4] Python拡張機能をVSIXで直接インストール
 # ----------------------------
 echo ""
-echo "[3/4] Python拡張機能のインストール（Open VSX経由）..."
+echo "[3/4] Python拡張機能のインストール（Open VSX から VSIX直接取得）..."
 
-install_ext() {
-    EXT_ID="$1"
+VSIX_DIR="$HOME/.cache/code-server-vsix"
+mkdir -p "$VSIX_DIR"
+
+install_vsix() {
+    PUBLISHER="$1"
     EXT_NAME="$2"
-    echo "  インストール中: $EXT_NAME ($EXT_ID)"
-    if code-server --install-extension "$EXT_ID" 2>&1 | grep -q -E "(already installed|successfully installed|Extension .* is already)"; then
-        echo "  → インストール済み or 完了"
-    else
-        code-server --install-extension "$EXT_ID" && echo "  → 完了" || echo "  → 失敗（スキップ）"
+    DISPLAY_NAME="$3"
+    VSIX_FILE="$VSIX_DIR/${PUBLISHER}.${EXT_NAME}.vsix"
+
+    echo "  インストール中: $DISPLAY_NAME"
+
+    # すでにインストール済みか確認
+    if code-server --list-extensions 2>/dev/null | grep -qi "${PUBLISHER}.${EXT_NAME}"; then
+        echo "  → すでにインストール済みです。スキップします。"
+        return 0
     fi
+
+    # Open VSX から最新バージョン情報を取得
+    API_URL="https://open-vsx.org/api/${PUBLISHER}/${EXT_NAME}/latest"
+    VSIX_URL=$(curl -sf "$API_URL" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    files = data.get('files', {})
+    print(files.get('download', ''))
+except:
+    print('')
+")
+
+    if [ -z "$VSIX_URL" ]; then
+        echo "  → URLの取得に失敗しました。スキップします。"
+        return 1
+    fi
+
+    echo "  → ダウンロード中: $VSIX_URL"
+    curl -fL "$VSIX_URL" -o "$VSIX_FILE" && \
+        code-server --install-extension "$VSIX_FILE" && \
+        echo "  → インストール完了" || \
+        echo "  → インストール失敗（スキップ）"
 }
 
-# Python本体拡張
-install_ext "ms-python.python" "Python"
-# debugpy拡張（デバッグUI）
-install_ext "ms-python.debugpy" "Python Debugger (debugpy)"
-# Pylance（あれば）
-install_ext "ms-python.vscode-pylance" "Pylance" || true
+install_vsix "ms-python" "python"  "Python"
+install_vsix "ms-python" "debugpy" "Python Debugger (debugpy)"
 
 # ----------------------------
 # [4/4] launch.json のテンプレート生成
@@ -75,7 +96,6 @@ install_ext "ms-python.vscode-pylance" "Pylance" || true
 echo ""
 echo "[4/4] launch.json テンプレートの生成..."
 
-VSCODE_DIR="$HOME/.local/share/code-server/User"
 LAUNCH_DIR="$HOME/launch_template"
 mkdir -p "$LAUNCH_DIR/.vscode"
 
@@ -132,4 +152,3 @@ echo "  以下コマンドで手動 debugpy デバッグが可能です："
 echo "    python -m debugpy --listen 5678 --wait-for-client your_script.py"
 echo "  その後、launch.json の 'Python: debugpy でアタッチ' を選んでF5"
 echo "================================================"
-EOF
