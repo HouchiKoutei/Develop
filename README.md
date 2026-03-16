@@ -7,7 +7,7 @@ HouchiKoutei's develop lab
 
 # 📱 スマホ Python 開発環境セットアップ
 
-新しいAndroid端末に一瞬で Python 開発環境（Termux + Acode）を構築するためのスクリプトを提供します。
+新しいAndroid端末に一瞬で Python 開発環境（Termux + code-server）を構築するためのスクリプトを提供します。
 
 ## 🚀 構築手順
 
